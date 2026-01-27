@@ -1,0 +1,63 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        Int      @id @default(autoincrement())
+  email     String   @unique
+  password  String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  locations UserLocation[]
+}
+
+model UserLocation {
+  id        Int      @id @default(autoincrement())
+  userId    Int
+  name      String
+  latitude  Float
+  longitude Float
+  altitude  Float?
+  user      User     @relation(fields: [userId], references: [id])
+}
+
+model Satellite {
+  noradId   Int      @id
+  name      String
+  category  String?  // LEO, GEO, MEO, etc.
+  country   String?
+  launchDate DateTime?
+  
+  tles      TLE[]
+  
+  @@index([category])
+}
+
+model TLE {
+  id        Int      @id @default(autoincrement())
+  noradId   Int
+  line1     String
+  line2     String
+  fetchedAt DateTime @default(now())
+  
+  satellite Satellite @relation(fields: [noradId], references: [noradId])
+
+  @@index([noradId])
+}
+
+// Observation can be used for user logs or actual observations
+model Observation {
+  id        Int      @id @default(autoincrement())
+  noradId   Int
+  userId    Int?
+  observedAt DateTime @default(now())
+  latitude  Float
+  longitude Float
+  azimuth   Float?
+  elevation Float?
+}
