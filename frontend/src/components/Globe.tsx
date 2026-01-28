@@ -1,6 +1,8 @@
 import { useEffect, useRef } from 'react';
 import * as Cesium from 'cesium';
+import "cesium/Build/Cesium/Widgets/widgets.css";
 import { useSatelliteStore } from '../store/satelliteStore';
+import { satelliteAPI } from '../services/api';
 
 interface GlobeProps {
     className?: string;
@@ -10,6 +12,7 @@ export const Globe: React.FC<GlobeProps> = ({ className = '' }) => {
     const containerRef = useRef<HTMLDivElement>(null);
     const viewerRef = useRef<Cesium.Viewer | null>(null);
     const satelliteEntitiesRef = useRef<Map<number, Cesium.Entity>>(new Map());
+    const pathEntityRef = useRef<Cesium.Entity | null>(null);
 
     const positions = useSatelliteStore(state => state.positions);
     const selectedSatelliteId = useSatelliteStore(state => state.selectedSatelliteId);
@@ -17,17 +20,16 @@ export const Globe: React.FC<GlobeProps> = ({ className = '' }) => {
 
     // Initialize Cesium viewer
     useEffect(() => {
+        console.log('Globe: useEffect init');
         if (!containerRef.current || viewerRef.current) return;
 
+        console.log('Globe: initializing viewer...');
         let viewer: Cesium.Viewer | null = null;
         let handler: Cesium.ScreenSpaceEventHandler | null = null;
 
-        const init = async () => {
-            if (!containerRef.current) return;
-
-            // Create the Cesium viewer
+        try {
+            // Create the Cesium viewer without awaiting layers first
             viewer = new Cesium.Viewer(containerRef.current, {
-                // Disable default UI widgets
                 animation: false,
                 timeline: false,
                 baseLayerPicker: false,
@@ -38,27 +40,20 @@ export const Globe: React.FC<GlobeProps> = ({ className = '' }) => {
                 sceneModePicker: false,
                 selectionIndicator: false,
                 navigationHelpButton: false,
-
-                // Enable features
                 shouldAnimate: true,
-
-                // Base Layer & Terrain (Async APIs)
-                baseLayer: await Cesium.ImageryLayer.fromWorldImagery({}),
-                terrain: await Cesium.Terrain.fromWorldTerrain({}),
             });
 
+            console.log('Globe: viewer created');
             viewerRef.current = viewer;
+            (window as any).viewer = viewer;
 
             // Configure scene
             viewer.scene.globe.enableLighting = true;
-            viewer.scene.globe.atmosphereLightIntensity = 3.0;
-            if (viewer.scene.skyAtmosphere) {
-                viewer.scene.skyAtmosphere.brightnessShift = 0.4;
-            }
+            viewer.scene.globe.showGroundAtmosphere = true;
 
             // Set initial camera position
             viewer.camera.setView({
-                destination: Cesium.Cartesian3.fromDegrees(0, 30, 20000000),
+                destination: Cesium.Cartesian3.fromDegrees(0, 20, 15000000),
                 orientation: {
                     heading: 0,
                     pitch: -Cesium.Math.PI_OVER_TWO,
@@ -66,27 +61,13 @@ export const Globe: React.FC<GlobeProps> = ({ className = '' }) => {
                 },
             });
 
-            // Add stars
-            viewer.scene.skyBox = new Cesium.SkyBox({
-                sources: {
-                    positiveX: 'https://cesium.com/downloads/cesiumjs/releases/1.91/Build/Cesium/Assets/Textures/SkyBox/tycho2t3_80_px.jpg',
-                    negativeX: 'https://cesium.com/downloads/cesiumjs/releases/1.91/Build/Cesium/Assets/Textures/SkyBox/tycho2t3_80_mx.jpg',
-                    positiveY: 'https://cesium.com/downloads/cesiumjs/releases/1.91/Build/Cesium/Assets/Textures/SkyBox/tycho2t3_80_py.jpg',
-                    negativeY: 'https://cesium.com/downloads/cesiumjs/releases/1.91/Build/Cesium/Assets/Textures/SkyBox/tycho2t3_80_my.jpg',
-                    positiveZ: 'https://cesium.com/downloads/cesiumjs/releases/1.91/Build/Cesium/Assets/Textures/SkyBox/tycho2t3_80_pz.jpg',
-                    negativeZ: 'https://cesium.com/downloads/cesiumjs/releases/1.91/Build/Cesium/Assets/Textures/SkyBox/tycho2t3_80_mz.jpg',
-                },
-            });
-
             // Handle click events
             handler = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
             handler.setInputAction((movement: Cesium.ScreenSpaceEventHandler.PositionedEvent) => {
-                const pickedObject = viewer.scene.pick(movement.position);
-
+                const pickedObject = viewer!.scene.pick(movement.position);
                 if (Cesium.defined(pickedObject) && pickedObject.id) {
                     const entity = pickedObject.id as Cesium.Entity;
-                    const noradId = entity.properties?.getValue(Cesium.JulianDate.now())?.noradId;
-
+                    const noradId = entity.properties?.getValue(viewer!.clock.currentTime)?.noradId;
                     if (noradId) {
                         setSelectedSatellite(noradId);
                     }
@@ -94,16 +75,23 @@ export const Globe: React.FC<GlobeProps> = ({ className = '' }) => {
                     setSelectedSatellite(null);
                 }
             }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
-        };
 
-        init();
+            // Async load high-res imagery if available
+            Cesium.ImageryLayer.fromWorldImagery({}).then(layer => {
+                if (viewer) viewer.imageryLayers.add(layer);
+            }).catch(e => console.warn('Globe: failed to load world imagery', e));
 
-        // Cleanup
+        } catch (error) {
+            console.error('Globe: initialization error', error);
+        }
+
         return () => {
+            console.log('Globe: cleanup');
             if (handler) handler.destroy();
             if (viewer) {
                 viewer.destroy();
                 viewerRef.current = null;
+                delete (window as any).viewer;
             }
         };
     }, [setSelectedSatellite]);
@@ -115,36 +103,34 @@ export const Globe: React.FC<GlobeProps> = ({ className = '' }) => {
 
         const entities = satelliteEntitiesRef.current;
 
-        // Update or create entities for each position
         positions.forEach((position, noradId) => {
             let entity = entities.get(noradId);
+            const cartesianPos = Cesium.Cartesian3.fromDegrees(
+                position.longitude,
+                position.latitude,
+                position.altitude * 1000
+            );
 
             if (!entity) {
-                // Create new entity
                 entity = viewer.entities.add({
-                    position: Cesium.Cartesian3.fromDegrees(
-                        position.longitude,
-                        position.latitude,
-                        position.altitude * 1000 // Convert km to meters
-                    ),
+                    id: `sat-${noradId}`,
+                    position: cartesianPos as any,
                     point: {
                         pixelSize: 8,
                         color: Cesium.Color.fromCssColorString('#00d4ff'),
-                        outlineColor: Cesium.Color.fromCssColorString('#ffffff'),
-                        outlineWidth: 2,
-                        heightReference: Cesium.HeightReference.NONE,
+                        outlineColor: Cesium.Color.WHITE,
+                        outlineWidth: 1,
                     },
                     label: {
                         text: position.name,
-                        font: '12px Inter, sans-serif',
+                        font: '10px Inter, sans-serif',
                         fillColor: Cesium.Color.WHITE,
                         outlineColor: Cesium.Color.BLACK,
                         outlineWidth: 2,
                         style: Cesium.LabelStyle.FILL_AND_OUTLINE,
                         verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
                         pixelOffset: new Cesium.Cartesian2(0, -10),
-                        showBackground: false,
-                        distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, 10000000),
+                        distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, 5000000),
                     },
                     properties: {
                         noradId,
@@ -154,54 +140,84 @@ export const Globe: React.FC<GlobeProps> = ({ className = '' }) => {
 
                 entities.set(noradId, entity);
             } else {
-                // Update existing entity position
-                entity.position = new Cesium.ConstantPositionProperty(
-                    Cesium.Cartesian3.fromDegrees(
-                        position.longitude,
-                        position.latitude,
-                        position.altitude * 1000
-                    )
-                );
+                entity.position = cartesianPos as any;
             }
 
             // Highlight selected satellite
             if (noradId === selectedSatelliteId) {
-                entity.point!.pixelSize = new Cesium.ConstantProperty(12);
-                entity.point!.color = new Cesium.ConstantProperty(Cesium.Color.fromCssColorString('#00ff88'));
+                if (entity.point) {
+                    (entity.point.pixelSize as any) = 12;
+                    (entity.point.color as any) = Cesium.Color.fromCssColorString('#00ff88');
+                }
             } else {
-                entity.point!.pixelSize = new Cesium.ConstantProperty(8);
-                entity.point!.color = new Cesium.ConstantProperty(Cesium.Color.fromCssColorString('#00d4ff'));
+                if (entity.point) {
+                    (entity.point.pixelSize as any) = 8;
+                    (entity.point.color as any) = Cesium.Color.fromCssColorString('#00d4ff');
+                }
             }
         });
 
-        // Remove entities that no longer have positions
-        entities.forEach((entity, noradId) => {
-            if (!positions.has(noradId)) {
-                viewer.entities.remove(entity);
-                entities.delete(noradId);
-            }
-        });
-    }, [positions, selectedSatelliteId]);
-
-    // Focus camera on selected satellite
-    useEffect(() => {
-        const viewer = viewerRef.current;
-        if (!viewer || !selectedSatelliteId) return;
-
-        const entity = satelliteEntitiesRef.current.get(selectedSatelliteId);
-        if (entity) {
-            viewer.flyTo(entity, {
-                duration: 2,
-                offset: new Cesium.HeadingPitchRange(0, -Cesium.Math.PI_OVER_FOUR, 5000000),
+        // Cleanup stale entities
+        if (positions.size > 0) {
+            entities.forEach((entity, noradId) => {
+                if (!positions.has(noradId)) {
+                    viewer.entities.remove(entity);
+                    entities.delete(noradId);
+                }
             });
         }
+    }, [positions, selectedSatelliteId]);
+
+    // Handle orbital path
+    useEffect(() => {
+        const viewer = viewerRef.current;
+        if (!viewer) return;
+
+        if (pathEntityRef.current) {
+            viewer.entities.remove(pathEntityRef.current);
+            pathEntityRef.current = null;
+        }
+
+        if (!selectedSatelliteId) return;
+
+        const loadPath = async () => {
+            try {
+                const data = await satelliteAPI.getSatellitePath(selectedSatelliteId);
+
+                const pathCoords = data.path.map(p =>
+                    Cesium.Cartesian3.fromDegrees(p.longitude, p.latitude, p.altitude * 1000)
+                );
+
+                pathEntityRef.current = viewer.entities.add({
+                    id: `path-${selectedSatelliteId}`,
+                    polyline: {
+                        positions: pathCoords,
+                        width: 3,
+                        material: new Cesium.PolylineGlowMaterialProperty({
+                            glowPower: 0.2,
+                            color: Cesium.Color.fromCssColorString('#00ff88'),
+                        }),
+                    }
+                });
+
+                // Zoom to satellite on first selection
+                const entity = satelliteEntitiesRef.current.get(selectedSatelliteId);
+                if (entity) {
+                    viewer.zoomTo(entity, new Cesium.HeadingPitchRange(0, -0.5, 3000000));
+                }
+            } catch (error) {
+                console.error('Path error:', error);
+            }
+        };
+
+        loadPath();
     }, [selectedSatelliteId]);
 
     return (
         <div
             ref={containerRef}
             className={`w-full h-full ${className}`}
-            style={{ position: 'relative' }}
+            style={{ position: 'relative', background: '#000', minHeight: '400px' }}
         />
     );
 };

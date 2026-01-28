@@ -3,7 +3,8 @@ import type {
     PaginatedResponse,
     ApiResponse,
     SearchParams,
-    Category
+    Category,
+    SatellitePath
 } from '../types/satellite';
 
 const API_BASE_URL = '/api/v1';
@@ -60,6 +61,11 @@ class SatelliteAPI {
     // Get system status
     async getStatus(): Promise<ApiResponse<any>> {
         return this.fetch<ApiResponse<any>>('/status');
+    }
+
+    // Get preditced path for a satellite
+    async getSatellitePath(noradId: number, duration: number = 90, step: number = 2): Promise<SatellitePath> {
+        return this.fetch<SatellitePath>(`/satellites/${noradId}/path?duration=${duration}&step=${step}`);
     }
 }
 

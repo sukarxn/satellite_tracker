@@ -1,15 +1,16 @@
 import { prisma } from '../config/database';
 import { calculateSatellitePosition } from './sgp4Service';
 import { setPositionsBatch } from './cacheService';
+import { SatelliteService } from './positionService';
 import type { SatellitePosition } from './sgp4Service';
 
 /**
  * Worker configuration
  */
 const WORKER_CONFIG = {
-    updateInterval: 1000, // 1 second between updates
+    updateInterval: 5000, // 5 seconds between updates (reduced frequency for performance)
     batchSize: 100, // Process satellites in batches
-    maxSatellites: 1000, // Limit for MVP (can be increased)
+    maxSatellites: 1000, // Limit for MVP
 };
 
 /**
@@ -21,16 +22,13 @@ let lastUpdateTime: Date | null = null;
 let processedCount = 0;
 let errorCount = 0;
 
+const satelliteService = SatelliteService.getInstance();
+
 /**
  * Fetch active TLEs from database
- * Gets the most recent TLE for each satellite
- * 
- * @param limit - Maximum number of satellites to fetch
- * @returns Array of satellites with their latest TLE
  */
 export const fetchActiveTLEs = async (limit: number = WORKER_CONFIG.maxSatellites) => {
     try {
-        // Get satellites with their most recent TLE
         const satellites = await prisma.satellite.findMany({
             take: limit,
             include: {
@@ -66,10 +64,6 @@ export const fetchActiveTLEs = async (limit: number = WORKER_CONFIG.maxSatellite
 
 /**
  * Process a batch of satellites
- * Calculates positions and writes to Redis cache
- * 
- * @param satellites - Array of satellites to process
- * @returns Number of successfully processed satellites
  */
 const processBatch = async (
     satellites: Array<{ noradId: number; name: string; tle: { line1: string; line2: string } }>
@@ -82,6 +76,9 @@ const processBatch = async (
             const position = calculateSatellitePosition(sat.noradId, sat.tle, now);
 
             if (position) {
+                // Update in-memory service for real-time WebSocket and paths
+                const tleString = `${sat.tle.line1}\n${sat.tle.line2}`;
+                satelliteService.updatePosition(sat.noradId, sat.name, position, tleString);
                 positions.push(position);
             } else {
                 errorCount++;
@@ -103,21 +100,18 @@ const processBatch = async (
 
 /**
  * Main worker loop
- * Fetches all active satellites and processes them in batches
  */
 const workerLoop = async () => {
+    if (!isRunning) return;
+
     try {
         const startTime = Date.now();
-
-        // Fetch all active satellites with TLEs
         const satellites = await fetchActiveTLEs();
 
         if (satellites.length === 0) {
             console.log('No satellites found in database');
             return;
         }
-
-        console.log(`Processing ${satellites.length} satellites...`);
 
         // Process in batches
         let totalProcessed = 0;
@@ -132,14 +126,8 @@ const workerLoop = async () => {
         lastUpdateTime = new Date();
 
         console.log(
-            `Worker cycle complete: ${totalProcessed}/${satellites.length} satellites processed in ${duration}ms ` +
-            `(${(duration / satellites.length).toFixed(2)}ms per satellite)`
+            `Worker cycle complete: ${totalProcessed}/${satellites.length} satellites processed in ${duration}ms`
         );
-
-        // Benchmark info
-        if (satellites.length >= 500) {
-            console.log(`Benchmark: Processing ${satellites.length} satellites took ${duration}ms`);
-        }
     } catch (error) {
         console.error('Error in worker loop:', error);
         errorCount++;
@@ -148,7 +136,6 @@ const workerLoop = async () => {
 
 /**
  * Start the position calculation worker
- * Runs continuously at configured interval
  */
 export const startWorker = () => {
     if (isRunning) {
@@ -156,14 +143,8 @@ export const startWorker = () => {
         return;
     }
 
-    console.log('Starting Position Calculation Worker...');
-    console.log(`Update interval: ${WORKER_CONFIG.updateInterval}ms`);
-    console.log(`Batch size: ${WORKER_CONFIG.batchSize}`);
-    console.log(`Max satellites: ${WORKER_CONFIG.maxSatellites}`);
-
     isRunning = true;
-    processedCount = 0;
-    errorCount = 0;
+    console.log('Starting Position Calculation Worker...');
 
     // Run immediately
     workerLoop();
@@ -176,49 +157,18 @@ export const startWorker = () => {
  * Stop the position calculation worker
  */
 export const stopWorker = () => {
-    if (!isRunning) {
-        console.log('Worker is not running');
-        return;
-    }
-
-    console.log('Stopping Position Calculation Worker...');
-
+    isRunning = false;
     if (workerInterval) {
         clearInterval(workerInterval);
         workerInterval = null;
     }
-
-    isRunning = false;
     console.log('Worker stopped');
 };
 
-/**
- * Get worker status and statistics
- */
-export const getWorkerStatus = () => {
-    return {
-        isRunning,
-        lastUpdateTime,
-        processedCount,
-        errorCount,
-        config: WORKER_CONFIG
-    };
-};
-
-/**
- * Update worker configuration
- * Worker must be restarted for changes to take effect
- */
-export const updateWorkerConfig = (config: Partial<typeof WORKER_CONFIG>) => {
-    Object.assign(WORKER_CONFIG, config);
-    console.log('Worker configuration updated:', WORKER_CONFIG);
-};
-
-// Graceful shutdown
-process.on('SIGTERM', () => {
-    stopWorker();
-});
-
-process.on('SIGINT', () => {
-    stopWorker();
+export const getWorkerStatus = () => ({
+    isRunning,
+    lastUpdateTime,
+    processedCount,
+    errorCount,
+    config: WORKER_CONFIG
 });

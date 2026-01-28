@@ -174,6 +174,39 @@ export const calculateSatellitePosition = (
 };
 
 /**
+ * Calculate satellite path for a given duration
+ * 
+ * @param noradId - NORAD catalog ID
+ * @param tle - Two-line element set
+ * @param startTime - Start time for calculation (defaults to now)
+ * @param durationMinutes - Duration of the path in minutes (defaults to 90)
+ * @param stepMinutes - Time step between points in minutes (defaults to 1)
+ * @returns Array of satellite positions or empty array if calculation fails
+ */
+export const calculateSatellitePath = (
+    noradId: number,
+    tle: TLEData,
+    startTime: Date = new Date(),
+    durationMinutes: number = 90,
+    stepMinutes: number = 1
+): SatellitePosition[] => {
+    const path: SatellitePosition[] = [];
+    const totalSteps = Math.ceil(durationMinutes / stepMinutes);
+
+    for (let i = 0; i <= totalSteps; i++) {
+        const timeOffset = i * stepMinutes * 60 * 1000;
+        const currentTime = new Date(startTime.getTime() + timeOffset);
+
+        const position = calculateSatellitePosition(noradId, tle, currentTime);
+        if (position) {
+            path.push(position);
+        }
+    }
+
+    return path;
+};
+
+/**
  * Validate TLE checksum
  * Each line of a TLE has a checksum as the last character
  * 

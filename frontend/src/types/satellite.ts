@@ -72,3 +72,9 @@ export interface Category {
     name: string;
     count: number;
 }
+
+export interface SatellitePath {
+    noradId: number;
+    name: string;
+    path: SatellitePosition[];
+}

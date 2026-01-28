@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import { prisma } from '../config/database';
+import { calculateSatellitePath } from '../services/sgp4Service';
 
 export const getSatellites = async (req: Request, res: Response) => {
     try {
@@ -109,5 +110,52 @@ export const searchSatellites = async (req: Request, res: Response) => {
         res.json(satellites);
     } catch (error) {
         res.status(500).json({ error: 'Search failed' });
+    }
+};
+
+export const getSatellitePath = async (req: Request, res: Response) => {
+    try {
+        const noradIdStr = req.params.noradId as string;
+        const noradId = parseInt(noradIdStr, 10);
+
+        const durationMinutes = parseInt(req.query.duration as string || '90', 10);
+        const stepMinutes = parseInt(req.query.step as string || '1', 10);
+
+        if (isNaN(noradId)) {
+            res.status(400).json({ error: 'Invalid NORAD ID' });
+            return;
+        }
+
+        const satellite = await prisma.satellite.findUnique({
+            where: { noradId },
+            include: {
+                tles: {
+                    orderBy: { fetchedAt: 'desc' },
+                    take: 1
+                }
+            }
+        });
+
+        if (!satellite || satellite.tles.length === 0) {
+            res.status(404).json({ error: 'Satellite or TLE data not found' });
+            return;
+        }
+
+        const path = calculateSatellitePath(
+            noradId,
+            { line1: satellite.tles[0].line1, line2: satellite.tles[0].line2 },
+            new Date(),
+            durationMinutes,
+            stepMinutes
+        );
+
+        res.json({
+            noradId,
+            name: satellite.name,
+            path
+        });
+    } catch (error) {
+        console.error('Error fetching satellite path:', error);
+        res.status(500).json({ error: 'Failed to calculate satellite path' });
     }
 };
