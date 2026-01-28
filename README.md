@@ -56,5 +56,5 @@ The server will be available at `http://localhost:3000`.
 ## implementation Status
 
 - [x] Week 1: Backend Foundation (Setup, DB, TLE Service, API Skeleton)
-- [ ] Week 2: Real-time Pipeline (SGP4, Redis, WebSocket)
-- [ ] Week 3: Frontend Setup
+- [x] Week 2: Real-time Pipeline (SGP4, Redis, WebSocket)
+- [] Week 3: Frontend Setup
