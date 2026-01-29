@@ -258,8 +258,4 @@ export const shutdownWebSocket = () => {
     }
 };
 
-// Graceful shutdown
-process.on('SIGTERM', shutdownWebSocket);
-process.on('SIGINT', shutdownWebSocket);
-
 export { io };

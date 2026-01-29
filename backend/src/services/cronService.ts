@@ -178,6 +178,4 @@ export const areJobsRunning = (): boolean => {
     return tleUpdateJob !== null && dataCleanupJob !== null;
 };
 
-// Graceful shutdown
-process.on('SIGTERM', stopBackgroundJobs);
-process.on('SIGINT', stopBackgroundJobs);
+

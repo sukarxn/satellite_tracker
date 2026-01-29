@@ -104,13 +104,25 @@ if (process.env.NODE_ENV !== 'test') {
 const shutdown = async () => {
     console.log('\n🛑 Shutting down gracefully...');
 
-    stopWorker();
-    stopBackgroundJobs();
-    shutdownWebSocket();
-    await disconnectServices();
+    // Force exit after 5 seconds if cleanup hangs
+    const forceExitTimeout = setTimeout(() => {
+        console.error('Forcing shutdown after timeout...');
+        process.exit(1);
+    }, 5000);
 
-    console.log('✓ All services stopped');
-    process.exit(0);
+    try {
+        stopWorker();
+        stopBackgroundJobs();
+        shutdownWebSocket();
+        await disconnectServices();
+
+        clearTimeout(forceExitTimeout);
+        console.log('✓ All services stopped');
+        process.exit(0);
+    } catch (error) {
+        console.error('Error during shutdown:', error);
+        process.exit(1);
+    }
 };
 
 process.on('SIGTERM', shutdown);
